@@ -30,7 +30,6 @@ if "processing_done" not in st.session_state:
 # مساعدات التنسيق المتقدمة لملفات Word عبر الـ XML
 # -----------------------------------------------------------------------------
 def set_table_borders(table, color_hex="2A4B7C"):
-    """تعديل لون خطوط (حدود) الجدول بالكامل إلى أزرق هادئ وجميل"""
     tblPr = table._tbl.tblPr
     borders = parse_xml(f'''
         <w:tblBorders {nsdecls("w")}>
@@ -45,18 +44,15 @@ def set_table_borders(table, color_hex="2A4B7C"):
     tblPr.append(borders)
 
 def set_cell_background(cell, fill_hex):
-    """تلوين خلفية الخلايا"""
     shading_elm = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{fill_hex}"/>')
     cell._tc.get_or_add_tcPr().append(shading_elm)
 
 def set_cell_no_wrap(cell):
-    """منع نزول الاسم لسطر جديد نهائياً في الخلية الواحدة"""
     tcPr = cell._tc.get_or_add_tcPr()
     no_wrap = parse_xml(f'<w:noWrap {nsdecls("w")}/>')
     tcPr.append(no_wrap)
 
 def format_cell_advanced(cell, text, bold=False, color_rgb=None, size_pt=14, font_name="Calibri", align="center"):
-    """تنسيق متطور للنصوص العربية مع التحكم الكامل بالخط والمحاذاة والتوسيط"""
     cell.text = str(text)
     p = cell.paragraphs[0]
     
@@ -90,6 +86,9 @@ def extract_and_clean_data(file_obj):
     doc = Document(file_obj)
     raw_records = []
     
+    # عداد لتسجيل ترتيب الاسم في الملف الأصلي
+    original_seq_counter = 1 
+    
     for table in doc.tables:
         for row in table.rows:
             cells = [cell.text.strip().replace('\n', ' ') for cell in row.cells]
@@ -106,23 +105,19 @@ def extract_and_clean_data(file_obj):
                         name_idx = i
             if name_idx == -1: continue
             
-            # إيجاد التسلسل الأصلي (نبحث في الحقول التي تسبق الاسم)
-            orig_seq = ""
-            for i in range(name_idx):
-                if re.search(r'\d+', cells[i]):
-                    orig_seq = re.sub(r'[^\d]', '', cells[i]) # أخذ الأرقام فقط
-                    break
-            
             # إيجاد رقم البطاقة القديم
             card_indices = [i for i, c in enumerate(cells) if c.isdigit() and len(c) >= 5]
             if not card_indices: continue
             old_card_num = cells[card_indices[0]]
                 
             raw_records.append({
-                "التسلسل الأصلي": orig_seq,
+                "التسلسل الأصلي": str(original_seq_counter),
                 "اسم رب الأسرة": cells[name_idx],
                 "رقم البطاقة القديم": old_card_num
             })
+            
+            # زيادة العداد لكل قيد صحيح يتم قراءته
+            original_seq_counter += 1
             
     df = pd.DataFrame(raw_records)
     if not df.empty:
@@ -136,14 +131,12 @@ def extract_and_clean_data(file_obj):
 def build_professional_word_report(df, filename_base):
     doc = Document()
     
-    # تقليل الهوامش من اليمين واليسار لاستغلال المساحة القصوى
     for section in doc.sections:
         section.top_margin = Cm(0.5)
         section.bottom_margin = Cm(0.5)
         section.left_margin = Cm(0.3)
         section.right_margin = Cm(0.3)
         
-    # تجريد اسم الملف
     clean_name = filename_base
     words_to_remove = ["مستكشف", "معدل", "كشف", "منسق", "جاهز"]
     for w in words_to_remove:
@@ -170,9 +163,8 @@ def build_professional_word_report(df, filename_base):
     fldChar3 = parse_xml(f'<w:fldChar {nsdecls("w")} w:fldCharType="end"/>')
     f_run._r.extend([fldChar1, instrText, fldChar2, fldChar3])
     
-    # الترتيب الجديد للأعمدة
     headers = ["ت", "اسم رب الأسرة", "رقم البطاقة القديم", "الأصلي"] + [str(i) for i in range(1, 13)]
-    num_cols = len(headers) # سيكون 16 عموداً
+    num_cols = len(headers) 
     
     table = doc.add_table(rows=1, cols=num_cols)
     table.style = 'Table Grid'
@@ -186,34 +178,27 @@ def build_professional_word_report(df, filename_base):
     trPr = table.rows[0]._tr.get_or_add_trPr()
     trPr.append(parse_xml(f'<w:tblHeader {nsdecls("w")}/>'))
     
-    # حساب عرض الاسم بناءً على أطول اسم
-    max_name_len = max(df["اسم رب الأسرة"].astype(str).str.len().max(), 15)
-    dynamic_name_width = Cm(max_name_len * 0.24 + 0.3)
-    
-    # مقاسات الأعمدة الجديدة
+    # 🔴 التعديلات على مقاسات الأعمدة 🔴
     col_widths = [
         Cm(0.8),              # ت
-        dynamic_name_width,   # اسم رب الأسرة
+        Cm(7.5),              # اسم رب الأسرة (حجم ثابت 7.5 سم)
         Cm(2.6),              # رقم البطاقة القديم
         Cm(1.2),              # التسلسل الأصلي
-    ] + [Cm(0.75)] * 12       # 12 عمود بحجم صغير (0.75 سم) يكفي لرقمين
+    ] + [Cm(1.5)] * 12        # 12 عمود بحجم مضاعف (1.5 سم)
     
     COLOR_NAVY_BLUE = RGBColor(42, 75, 124)
     
-    # تنسيق صف العناوين الرئيسي
-    hdr_cells = table.rows[0].cells
     for i, title in enumerate(headers):
+        hdr_cells = table.rows[0].cells
         hdr_cells[i].width = col_widths[i]
         
         cell_align = "center"
-        font_size = 11 if i >= 4 else 12 # تصغير خط أرقام الأعمدة الـ 12
+        font_size = 11 if i >= 4 else 12 
         format_cell_advanced(hdr_cells[i], title, bold=True, size_pt=font_size, font_name="Segoe UI Semibold", align=cell_align, color_rgb=COLOR_NAVY_BLUE)
             
-    # ألوان الخلفيات الجديدة المطلوبة
-    HEX_LIGHT_GREY = "F2F4F4"   # رصاصي خفيف للتسلسل
-    HEX_FAINT_SKY = "EAF2F8"    # سمائي خافت لرقم البطاقة
+    HEX_LIGHT_GREY = "F2F4F4"   
+    HEX_FAINT_SKY = "EAF2F8"    
     
-    # تعبئة صفوف البيانات
     for idx, row in df.iterrows():
         row_cells = table.add_row().cells
         
@@ -228,27 +213,24 @@ def build_professional_word_report(df, filename_base):
         for i in range(num_cols):
             val = ""
             cell_align = "center"
-            font_size = 14 # الحجم المطلوب لجميع الحقول الأساسية
+            font_size = 14 
             
             if i == 0: val = row["ت"]
             elif i == 1: 
                 val = row["اسم رب الأسرة"]
                 cell_align = "left" 
-                font_size = 16 # الإبقاء على حجم الاسم كبير قليلاً ليكون واضحاً
+                font_size = 16 
             elif i == 2: val = row["رقم البطاقة القديم"]
             elif i == 3: val = row["التسلسل الأصلي"]
-            # من العمود 4 إلى 15 (الأعمدة الـ 12) ستترك فارغة (val = "")
             
             format_cell_advanced(row_cells[i], val, size_pt=font_size, font_name="Calibri", align=cell_align)
             
-            # تلوين الخلايا حسب الطلب
             if i == 0: set_cell_background(row_cells[i], HEX_LIGHT_GREY)
             elif i == 2: set_cell_background(row_cells[i], HEX_FAINT_SKY)
 
-    # محرك الإحصاء والمجموع الكلي أسفل الجدول
     total_all = len(df)
     
-    doc.add_paragraph()  # سطر فارغ للفصل بصرياً بعد الجدول
+    doc.add_paragraph() 
     stats_p = doc.add_paragraph()
     stats_p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     stats_p.paragraph_format.element.get_or_add_pPr().append(parse_xml(f'<w:bidi {nsdecls("w")}/>'))
@@ -266,10 +248,10 @@ def build_professional_word_report(df, filename_base):
     return buffer
 
 # -----------------------------------------------------------------------------
-# واجهة استخدام التطبيق (Streamlit Interface)
+# واجهة استخدام التطبيق
 # -----------------------------------------------------------------------------
 st.markdown("<h3 style='text-align: right;'>📂 رفع الكشف المراد تدقيقه وتنسيقه للمطبعة</h3>", unsafe_allow_html=True)
-uploaded_file = st.file_uploader("ارفع كشف الوكلاء", type=['docx'], key="doc_input_v7", label_visibility="collapsed")
+uploaded_file = st.file_uploader("ارفع كشف الوكلاء", type=['docx'], key="doc_input_v8", label_visibility="collapsed")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -280,7 +262,7 @@ if uploaded_file:
 
 if st.button("⚙️ تشغيل محرك التنظيم والتنسيق المتقدم الكلي"):
     if uploaded_file:
-        with st.spinner('جاري ترتيب القيود أبجدياً وإعداد التنسيق الشرطي والمقاييس...'):
+        with st.spinner('جاري الترتيب وضبط المقاسات...'):
             try:
                 df_res = extract_and_clean_data(uploaded_file)
                 if not df_res.empty:
@@ -304,7 +286,7 @@ if st.session_state.processing_done:
         word_output = build_professional_word_report(df_final, output_filename)
         
     st.download_button(
-        label="📥 تحميل كشف الوكلاء المنسق والجاهز للطباعة فوراً (Word)",
+        label="📥 تحميل كشف الوكلاء المنسق والجاهز (Word)",
         data=word_output,
         file_name=f"كشف_منسق_جاهز_{output_filename}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
