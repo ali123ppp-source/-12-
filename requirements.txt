@@ -1,0 +1,3 @@
+‎streamlit
+pandas
+python-docx
